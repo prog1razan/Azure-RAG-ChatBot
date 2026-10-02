@@ -1,79 +1,156 @@
-# Solution
+# Azure RAG Chatbot
 
-## Creating the Infrastructure with Terraform
+A cloud-native chatbot application that lets users upload PDF documents and ask questions about them using Retrieval-Augmented Generation (RAG). Built with Streamlit, FastAPI, and LangChain, and deployed entirely on Microsoft Azure using Infrastructure as Code (Terraform).
 
-To use this solution, you first need to create a folder named ssh-keys and place your SSH public key inside it. Rename the key file to terraform-azure.pub.
+## Overview
 
-Next, create a file named terraform.tfvars and add the following content:
+This project demonstrates a full production-style deployment of an AI-powered chat application on Azure, covering:
+
+- Infrastructure provisioning with **Terraform**
+- Managed **PostgreSQL** database for chat metadata
+- **Azure Blob Storage** for chat logs and uploaded PDFs
+- **ChromaDB** for vector search over document embeddings
+- **Azure Key Vault** with VM Managed Identity for secret management (no secrets in code or `.env`)
+- Containerized deployment via **Docker Compose** on an Azure Linux VM
+
+## Architecture
 
 ```
-resource_group_name = "YOUR-GROUP-NAME"
-subscription_id     = "YOUR-SUBSCRIPTION-ID"
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│  Streamlit   │─────▶│   FastAPI    │─────▶│  ChromaDB   │
+│  (chatbot)   │      │  (backend)   │      │  (vectors)  │
+└─────────────┘      └──────┬───────┘      └─────────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+     ┌─────────────┐ ┌──────────────┐ ┌─────────────┐
+     │ Azure Postgres│ │ Azure Blob   │ │ Azure Key   │
+     │  (chat data)  │ │ Storage      │ │ Vault       │
+     │               │ │ (files/logs) │ │ (secrets)   │
+     └─────────────┘ └──────────────┘ └─────────────┘
 ```
 
-Replace YOUR-GROUP-NAME with your Azure resource group name and YOUR-SUBSCRIPTION-ID with your Azure subscription ID.
+All services run as Docker containers on a single Azure VM, provisioned and networked via Terraform.
 
-Finally, run the following commands to initialize Terraform and deploy the infrastructure:
+## Features
 
-```sh
+- 💬 Create and manage multiple chat sessions
+- 📄 Upload a PDF and ask questions specific to its content (RAG)
+- 🔄 Streamed responses from OpenAI models
+- ☁️ Chat history and PDFs persisted to Azure Blob Storage
+- 🗄️ Chat metadata stored in Azure Database for PostgreSQL
+- 🔐 Secrets pulled securely from Azure Key Vault at runtime via the VM's Managed Identity
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Streamlit |
+| Backend API | FastAPI |
+| LLM orchestration | LangChain |
+| Vector store | ChromaDB |
+| Relational database | Azure Database for PostgreSQL (Flexible Server) |
+| File storage | Azure Blob Storage |
+| Secret management | Azure Key Vault |
+| Infrastructure | Terraform |
+| Containerization | Docker / Docker Compose |
+| CI/CD | GitHub Actions (build → Docker Hub → deploy to Azure VM) |
+
+## Infrastructure (Terraform)
+
+The `*.tf` files provision:
+
+- Resource Group, Virtual Network, Subnet
+- Network Security Group with inbound rules (22, 80, 443, 8501)
+- Linux VM (Ubuntu 24.04) with SSH key authentication and a System-Assigned Managed Identity
+- Azure Database for PostgreSQL Flexible Server + database
+- Azure Storage Account + Blob container
+- Azure Key Vault with access policies for the deploying user and the VM's identity
+
+```bash
 terraform init
 terraform apply
 ```
 
-## Azure Database for PostgreSQL server
+See `terraform.tfvars.example` for the variables you need to supply (resource group name, subscription ID, region).
 
-Once the infrastructure is provisioned, we will configure the Azure Database for PostgreSQL server manually. The steps are as follows:
+## Application Secrets
 
-1. Create a new database called `appdb` on Azure.
-2. Configure the firewall rules to allow your IP address to connect to the database.
-3. Use DBeaver to connect to the `appdb` database and create a new user called `appuser` with the password `appuser`:
+Secrets are stored in Azure Key Vault rather than in `.env`:
 
-   ```sql
-   CREATE USER appuser WITH ENCRYPTED PASSWORD 'appuser';
-   GRANT ALL PRIVILEGES ON DATABASE appdb TO appuser;
-   GRANT ALL PRIVILEGES ON SCHEMA public TO appuser;
-
-   CREATE TABLE IF NOT EXISTS advanced_chats (
-       id TEXT PRIMARY KEY,
-       name TEXT NOT NULL,
-       file_path TEXT NOT NULL,
-       last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-       pdf_path TEXT,
-       pdf_name TEXT,
-       pdf_uuid TEXT
-   );
-
-   GRANT ALL PRIVILEGES ON TABLE advanced_chats TO appuser;
-   ```
-
-## Azure Blob Storage
-
-1. Create a Shared Access Signature (SAS) for the storage account. Make sure to select all options under `Allowed resource types` and set the appropriate expiry time. Copy the generated `Blob service SAS URL`.
-2. Copy the Blob service SAS URL and paste it in the `.env` file in your VM.
-
-## Azure VM
-
-1. SSH into the virtual machine `ssh -i YOUR-PRIVATE-KEY-PATH azureuser@YOUR-VM-PUBLIC-IP`
-2. Install Docker using installDocker.sh script. Remember to exit the SSH session after the installation is complete and ssh back into the VM to let the Docker service start.
-3. Create an `.env` file including
-
-```env
-OPENAI_API_KEY=YOUR-API-KEY
-DB_NAME=YOUR-DB-NAME
-DB_USER=YOUR-DB-USER
-DB_PASSWORD=YOUR-DB-PASSWORD
-DB_HOST=YOUR-DB-HOST
-DB_PORT=YOUR-DB-PORT
-AZURE_STORAGE_SAS_URL=YOUR-SAS-URL
-AZURE_STORAGE_CONTAINER=YOUR-CONTAINER-NAME
-CHROMADB_HOST=chromadb
-CHROMADB_PORT=8000
+```
+PROJ-DB-NAME
+PROJ-DB-USER
+PROJ-DB-PASSWORD
+PROJ-DB-HOST
+PROJ-DB-PORT
+PROJ-OPENAI-API-KEY
+PROJ-AZURE-STORAGE-SAS-URL
+PROJ-AZURE-STORAGE-CONTAINER
+PROJ-CHROMADB-HOST
+PROJ-CHROMADB-PORT
 ```
 
-4. Start the application using Docker Compose
+The VM only needs one value locally, in `.env`:
 
-```sh
+```env
+KEY_VAULT_NAME=your-key-vault-name
+```
+
+The backend authenticates to Key Vault using `DefaultAzureCredential`, which picks up the VM's Managed Identity automatically — no credentials are stored on disk.
+
+## Running the App
+
+On the VM, after cloning this repo and creating `.env`:
+
+```bash
 docker compose up --build -d
 ```
 
-In the end, you should be able to access the application via the VM’s public IP address, with data stored in the Azure Database for PostgreSQL server and files stored in Azure Blob Storage.
+This starts three containers:
+
+- `chromadb` — vector database (port 8000)
+- `backend` — FastAPI service (port 5000)
+- `chatbot` — Streamlit UI (port 8501)
+
+Once running, the app is available at:
+
+```
+http://<VM_PUBLIC_IP>:8501
+```
+
+## Project Structure
+
+```
+.
+├── backend.py              # FastAPI app: chat, RAG, PDF upload, chat history
+├── chatbot.py               # Streamlit frontend
+├── Dockerfile.backend
+├── Dockerfile.chatbot
+├── docker-compose.yml
+├── requirements.txt
+├── installDocker.sh          # Docker installation script for the VM
+├── *.tf                      # Terraform infrastructure (network, VM, db, storage, key vault)
+└── .github/workflows/        # CI/CD pipeline (build, push, deploy)
+```
+
+## CI/CD
+
+GitHub Actions builds the backend and chatbot Docker images, pushes them to Docker Hub, and deploys the updated containers to the Azure VM over SSH.
+
+Required repository secrets:
+
+| Secret | Description |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+| `AZURE_CREDENTIALS` | Service principal JSON for Azure CLI login |
+| `RESOURCE_GROUP_NAME` | Resource group containing the VM |
+| `VM_NAME` | Name of the target Azure VM |
+
+## Security Notes
+
+- No secrets are committed to this repository (`.gitignore` excludes `.env`, `terraform.tfvars`, `terraform.tfstate`, and `ssh-keys/`).
+- Database credentials and API keys live only in Azure Key Vault.
+- The VM authenticates to Key Vault via a System-Assigned Managed Identity — no key files involved.
+- SAS tokens for Blob Storage are scoped and time-limited.
