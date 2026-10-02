@@ -13,6 +13,12 @@ This project demonstrates a full production-style deployment of an AI-powered ch
 - **Azure Key Vault** with VM Managed Identity for secret management (no secrets in code or `.env`)
 - Containerized deployment via **Docker Compose** on an Azure Linux VM
 
+## Application
+
+![Azure RAG Chatbot](images/azure-rag-chatbot.png)
+
+The application provides a Streamlit-based interface where users can upload PDF documents, create chat sessions, and ask questions about the uploaded content using Retrieval-Augmented Generation (RAG).
+
 ## Architecture
 
 ```
