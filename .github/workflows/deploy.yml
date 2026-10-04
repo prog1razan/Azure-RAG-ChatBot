@@ -1,0 +1,53 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/azure-rag-chatbot-backend:latest
+
+      - name: Build and push chatbot image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.chatbot
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/azure-rag-chatbot-chatbot:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure VM
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az vm run-command invoke \
+              --resource-group ${{ secrets.RESOURCE_GROUP_NAME }} \
+              --name ${{ secrets.VM_NAME }} \
+              --command-id RunShellScript \
+              --scripts "cd /home/azureuser/Azure-RAG-ChatBot && ./update_app.sh"
